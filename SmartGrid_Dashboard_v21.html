@@ -1,0 +1,1900 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  SmartGrid Dashboard — Live Trading Monitoring
+  ============================================================================
+  v21 (2026-06-14) — PWA-ready (installable as Android APK via PWABuilder)
+    - Added <link rel="manifest"> pointing to manifest.json so Chrome/Edge
+      treats the page as an installable app on Android and desktop.
+    - Added meta theme-color and apple-mobile-web-app-capable for native
+      status-bar coloring on Android + full-screen launch on iOS.
+    - Added inline service-worker registration script (registers
+      ./service-worker.js on load if browser supports it). The SW caches
+      the app shell so the dashboard opens instantly even on flaky 4G.
+      Sheety API calls are explicitly NOT cached — live data only.
+    - Required files to host alongside the HTML (in same directory):
+        manifest.json
+        service-worker.js
+        icon-192.png
+        icon-512.png
+        icon-maskable-512.png
+    - Workflow: host these 5 files on GitHub Pages (or any HTTPS host),
+      then submit the URL to https://www.pwabuilder.com to generate an
+      Android .apk file Ferry can sideload onto his phone.
+    - Touch targets enlarged on mobile (.refresh-btn min-height 36px,
+      .cal-toggle-btn min-height 32px on viewport < 880px) for thumb use.
+    - No data-shape or behavior changes from v20 — pure PWA wiring.
+  v20 (2026-06-14) — Calendar cell DD lighter + inline legend
+    - Calendar cell DD line (second row in each day): font-size 13px → 10px,
+      font-weight 700 → 400. The red DD numbers now read as supplementary
+      info under the dominant green/red daily profit.
+    - Mobile breakpoint also reduced: .cal-dd 11px → 9px.
+    - Calendar header gains an inline legend next to the title so viewers
+      who weren't told the convention can decode the colors at a glance:
+        Gold-Collector #21479897   ● profit   ● max DD
+      Legend uses small colored dots (8px) matching the cell colors.
+    - No data shape, JS state, or HTML structural change beyond appending
+      legend markup inside the existing .cal-title div.
+  v19 (2026-06-14) — Compact card + 5-cols grid on wide monitors
+    - Grid minmax: 420px → 290px. On a 1920px monitor this gives 5 cards
+      per row (was 4 in v18). Degrades gracefully: 4 cols at ~1450px,
+      3 at ~1090px, 2 at ~700px, 1 below.
+    - Card content tightened for narrow widths (~290-340px per card):
+        .account-card padding         20px      → 14px
+        .acc-header margin-bottom     18px      → 12px
+        .acc-label font-size          17px      → 14px
+        .equity-block padding/margin  18px      → 12px
+        .equity-value font-size       22px      → 18px
+        .floating-block gap+margin    10/18px   → 6/12px
+        .float-cell padding           12px 14px → 8px 10px
+        .float-cell .val font-size    18px      → 14px
+        .trend-wrap margin+padding    16/12px   → 10/8px
+        .trend-chart height           56px      → 36px
+        .stats-grid font-size         12px      → 10.5px
+    - Calendar panel below the grid is unchanged.
+    - No structural / JS / state changes — pure CSS tightening on top
+      of v18. localStorage keys and Sheety API contract preserved.
+  v18 (2026-06-14) — Auto-fit grid layout, single inline calendar panel
+    - Layout: #account-rows changes from flex-column to CSS grid with
+      auto-fit columns (minmax 420px). On a 1920px monitor that's 3-4
+      cards per row; on narrower screens it gracefully drops to 2 or 1.
+    - acct-row no longer contains a calendar — each row is just the card.
+      All cards are siblings of the grid container.
+    - One shared calendar panel ("active-cal-panel") sits BELOW the grid.
+      Only one calendar is shown at a time. Clicking 📅 detail on a
+      card swaps the panel to that account's calendar; clicking again
+      (or × close in the panel) hides it.
+    - Active card gets a green accent border to indicate which calendar
+      is currently displayed.
+    - Auto-scroll to the panel when a calendar is first opened, so the
+      user sees the result of their click even if the panel is offscreen.
+    - Removed the global "show all calendars" button — only per-card
+      detail buttons remain (single calendar mental model is cleaner).
+    - Calendar HTML is cached in calHtmlByAccId so toggling between
+      accounts is instant; rebuilt on every renderAccountRows pass.
+    - Card content unchanged from v17 — same equity / floating / DD /
+      trend charts / stats. Cards just naturally shrink to fit grid
+      cell width. No font-size reductions needed at minmax 420px.
+  v17 (2026-06-14) — Hide-by-default calendar with per-card + global toggle
+    - Layout: .acct-row was 2-column grid (card | calendar). Now single
+      column — card on top, calendar below (initially hidden).
+    - Per-card button "📅 detail" in card header toggles that account's
+      calendar individually (chevron flips to "× hide" when shown).
+    - Top bar adds global "📅 show all calendars" / "📅 hide all calendars"
+      button that flips every card at once. Smart label: if any card is
+      hidden it says "show all", otherwise "hide all".
+    - State (calVisible dict) is in-memory only; every page reload starts
+      with all calendars hidden. No localStorage key was added.
+    - applyCalendarVisibility() is called after every render so state
+      persists across data refreshes within the same session.
+    - Backward compat: no Sheety API change, no settings key change.
+      Existing localStorage (sgm_config_v1, sgm_capital_v1, sgm_currency_v1,
+      sgm_acct_order_v1) all preserved.
+  v16 — Account ordering (Settings modal up/down buttons, sgm_acct_order_v1)
+  ============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Trading Monitoring · v21</title>
+
+<!-- v21: PWA support — installable on Android via Chrome's "Add to Home Screen"
+     or repackaged as an Android APK via https://www.pwabuilder.com -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a0e14">
+<meta name="application-name" content="SmartGrid Monitor">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SG Monitor">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0e14;
+    --bg-elev: #11161e;
+    --bg-card: #151b26;
+    --bg-card-hover: #1a2230;
+    --border: #1f2937;
+    --border-strong: #2a3441;
+    --text: #f0f6fc;
+    --text-dim: #b3bdcc;
+    --text-faint: #7e8aa0;
+    --accent: #7dd3fc;
+    --accent-warm: #fbbf24;
+    --green: #4ade80;
+    --green-neon: #5effa0;
+    --green-bg: rgba(74, 222, 128, 0.08);
+    --red: #f87171;
+    --red-neon: #ff7b8a;
+    --red-bg: rgba(248, 113, 113, 0.08);
+    --yellow: #fbbf24;
+    --yellow-bg: rgba(251, 191, 36, 0.08);
+    --mono: 'JetBrains Mono', 'Courier New', monospace;
+    --display: 'Manrope', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--display);
+    font-feature-settings: 'ss01', 'cv11';
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Subtle grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(125, 211, 252, 0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(125, 211, 252, 0.025) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Glow accent in corner */
+  body::after {
+    content: '';
+    position: fixed;
+    top: -200px;
+    right: -200px;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(125, 211, 252, 0.06) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap { position: relative; z-index: 1; max-width: 1600px; margin: 0 auto; padding: 24px; }
+
+  /* ========== HEADER ========== */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 32px;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+  }
+  .brand-mark {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--accent);
+    letter-spacing: 0.2em;
+    border: 1px solid var(--accent);
+    padding: 3px 9px;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+  .brand-title {
+    font-family: var(--display);
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+  .brand-sub {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+  }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .status-item { display: flex; align-items: center; gap: 8px; color: var(--text-dim); }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+  .status-dot.live { background: var(--green); box-shadow: 0 0 12px var(--green); animation: pulse 2s ease-in-out infinite; }
+  .status-dot.error { background: var(--red); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .refresh-btn {
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .refresh-btn:hover { background: var(--bg-card-hover); border-color: var(--accent); color: var(--accent); }
+  .refresh-btn:active { transform: scale(0.97); }
+
+  /* ========== AGGREGATE STATS ========== */
+  .aggregate {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 28px;
+  }
+  .agg-cell {
+    background: var(--bg-elev);
+    padding: 18px 22px;
+    position: relative;
+  }
+  .agg-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .agg-value {
+    font-family: var(--mono);
+    font-size: 24px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+  .agg-sub {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-top: 4px;
+  }
+  .agg-value.pos { color: var(--green); }
+  .agg-value.neg { color: var(--red); }
+
+  /* ========== ACCOUNT GRID ========== */
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--border), transparent);
+  }
+
+  .accounts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 16px;
+  }
+
+  /* Account + calendar paired rows */
+  /* v18: auto-fit grid layout — cards arrange in 1-5 columns based on
+     viewport width. Calendar moved to a single shared panel below the grid.
+     v19: minmax lowered to 290px so 1920px monitors fit 5 cards per row. */
+  #account-rows {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+    gap: 14px;
+    align-items: start;
+  }
+  .acct-row { min-width: 0; display: flex; }
+  .acct-row .account-card { width: 100%; }
+  .acct-row.active-cal { box-shadow: 0 0 0 2px var(--accent); border-radius: 12px; }
+
+  /* v18: shared calendar panel sits below the grid, only one at a time */
+  #active-cal-panel {
+    margin-top: 18px;
+    background: var(--bg-card);
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    padding: 14px 18px;
+    display: none;
+  }
+  #active-cal-panel.shown { display: block; }
+  .cal-panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .cal-panel-title { font-size: 14px; color: var(--text); font-weight: 500; }
+  .cal-panel-close {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .cal-panel-close:hover { background: var(--bg-card-hover); border-color: var(--red); color: var(--red); }
+
+  /* v17: small "detail" button inside card header */
+  .cal-toggle-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    margin-left: 8px;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .cal-toggle-btn:hover { background: var(--bg-card-hover); border-color: var(--accent); color: var(--accent); }
+  .cal-toggle-btn.active { background: var(--bg-card-hover); border-color: var(--accent); color: var(--accent); }
+
+  .account-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;                       /* v19: 20px → 14px */
+    position: relative;
+    transition: all 0.2s;
+    overflow: hidden;
+  }
+  .account-card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+  .account-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: var(--text-faint);
+  }
+  .account-card.ok::before { background: linear-gradient(90deg, var(--green), transparent); }
+  .account-card.warn::before { background: linear-gradient(90deg, var(--yellow), transparent); }
+  .account-card.danger::before { background: linear-gradient(90deg, var(--red), transparent); }
+
+  .acc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;                /* v19: 18px → 12px */
+    gap: 8px;                            /* v19: 10px → 8px */
+  }
+  .acc-label {
+    font-family: var(--display);
+    font-size: 14px;                    /* v19: 17px → 14px */
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .acc-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    margin-top: 2px;
+    letter-spacing: 0.05em;
+  }
+  .acc-badge {
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-weight: 500;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+  .acc-badge.ok { color: var(--green); border-color: var(--green); background: var(--green-bg); }
+  .acc-badge.warn { color: var(--yellow); border-color: var(--yellow); background: var(--yellow-bg); }
+  .acc-badge.danger { color: var(--red); border-color: var(--red); background: var(--red-bg); }
+
+  /* Equity hero */
+  .equity-block {
+    margin-bottom: 12px;                /* v19: 18px → 12px */
+    padding-bottom: 12px;                /* v19: 18px → 12px */
+    border-bottom: 1px dashed var(--border-strong);
+  }
+  .equity-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .equity-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+  .equity-value {
+    font-family: var(--mono);
+    font-size: 18px;                    /* v19: 22px → 18px */
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  .balance-line {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 11px;                    /* v19: 12px → 11px */
+    color: var(--text-dim);
+  }
+  .balance-line .v { color: var(--text); }
+
+  /* Floating + DD prominent */
+  .floating-block {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;                            /* v19: 10px → 6px */
+    margin-bottom: 12px;                 /* v19: 18px → 12px */
+  }
+  .float-cell {
+    background: var(--bg-elev);
+    border-radius: 6px;
+    padding: 8px 10px;                   /* v19: 12px 14px → 8px 10px */
+  }
+  .float-cell .lbl {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 3px;                  /* v19: 4px → 3px */
+  }
+  .float-cell .val {
+    font-family: var(--mono);
+    font-size: 14px;                     /* v19: 18px → 14px */
+    font-weight: 500;
+  }
+  .val.pos { color: var(--green); }
+  .val.neg { color: var(--red); }
+  .val.warn { color: var(--yellow); }
+
+  /* DD bar */
+  .dd-bar {
+    margin-top: 8px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .dd-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--green), var(--yellow) 40%, var(--red) 80%);
+    transition: width 0.4s ease;
+    border-radius: 2px;
+  }
+
+  /* Daily P/L trend mini chart */
+  .trend-wrap {
+    margin-bottom: 10px;                 /* v19: 16px → 10px */
+    background: var(--bg-elev);
+    border-radius: 6px;
+    padding: 8px 10px 6px;               /* v19: 12px 14px 8px → 8px 10px 6px */
+  }
+  .trend-title {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 6px;                  /* v19: 10px → 6px */
+  }
+  .trend-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 36px;                        /* v19: 56px → 36px */
+  }
+  .trend-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    height: 100%;
+    cursor: default;
+  }
+  .trend-bar {
+    width: 100%;
+    max-width: 18px;
+    border-radius: 2px 2px 0 0;
+    transition: opacity 0.15s;
+  }
+  .trend-bar.pos { background: var(--green); }
+  .trend-bar.neg { background: var(--red); }
+  .trend-bar.dd  { background: var(--red); opacity: 0.85; }
+  .trend-col:hover .trend-bar { opacity: 0.7; }
+
+  /* Profit calendar */
+  .cal-empty {
+    font-family: var(--mono); font-size: 12px; color: var(--text-faint);
+    padding: 20px; text-align: center; background: var(--bg-card);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  .cal-wrap {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px 20px; margin-bottom: 20px;
+  }
+  .cal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 10px; margin-bottom: 14px;
+  }
+  .cal-title { font-family: var(--mono); font-size: 15px; color: var(--text); font-weight: 600; }
+  .cal-acc { color: var(--text-dim); font-size: 11px; font-weight: 400; }
+  .cal-nav { display: flex; align-items: center; gap: 10px; }
+  .cal-nav button {
+    background: var(--bg-elev); color: var(--text); border: 1px solid var(--border-strong);
+    border-radius: 6px; width: 28px; height: 28px; cursor: pointer; font-size: 16px;
+    font-family: var(--mono); line-height: 1;
+  }
+  .cal-nav button:hover { background: var(--border); }
+  .cal-month { font-family: var(--mono); font-size: 13px; color: var(--text-dim); min-width: 90px; text-align: center; }
+  .cal-total { font-family: var(--mono); font-size: 14px; font-weight: 600; }
+  .cal-total.pos { color: var(--green); }
+  .cal-total.neg { color: var(--red); }
+  .cal-total span { color: var(--text-dim); font-size: 11px; font-weight: 400; }
+  .cal-grid {
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px;
+  }
+  .cal-wd {
+    font-family: var(--mono); font-size: 10px; color: var(--text-faint);
+    text-align: center; padding: 4px 0; letter-spacing: 0.1em;
+  }
+  .cal-cell {
+    min-height: 62px; border-radius: 7px; padding: 5px 6px;
+    background: var(--bg-elev); border: 1px solid transparent;
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .cal-cell.empty { background: transparent; }
+  .cal-cell.pos { background: rgba(34,197,94,0.10); border-color: rgba(34,197,94,0.25); }
+  .cal-cell.neg { background: rgba(239,68,68,0.10); border-color: rgba(239,68,68,0.25); }
+  .cal-day { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+  .cal-line { display: flex; justify-content: space-between; align-items: baseline; gap: 4px; }
+  .cal-line.first { margin-top: auto; }
+  .cal-profit { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+  .cal-profit.pos { color: var(--green-neon); }
+  .cal-profit.neg { color: var(--red-neon); }
+  .cal-dd { font-family: var(--mono); font-size: 10px; font-weight: 400; color: var(--red-neon); margin-top: 2px; }   /* v20: 13/700 → 10/400 — supplementary info under profit */
+
+  /* v20: inline legend next to cal-title — explains color convention to viewers */
+  .cal-legend-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: 14px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    font-weight: 400;
+    letter-spacing: 0.05em;
+  }
+  .cal-legend-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .cal-legend-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    display: inline-block;
+  }
+  .cal-legend-dot.pos { background: var(--green-neon); }
+  .cal-legend-dot.neg { background: var(--red-neon); }
+
+  /* Monthly stats — boxed grid (PRO look) */
+  .cal-stats {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+    margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border);
+  }
+  .cal-stat {
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .cs-lbl {
+    font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px;
+  }
+  .cs-val { font-family: var(--mono); font-size: 19px; font-weight: 700; color: var(--text); }
+  .cs-val.pos { color: var(--green-neon); }
+  .cs-val.neg { color: var(--red-neon); }
+  .cs-val.dim { color: var(--text-dim); }
+  .cs-sub { font-family: var(--mono); font-size: 12px; color: var(--text-dim); margin-top: 6px; }
+  .cap-edit { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+  .cap-edit:hover { color: var(--accent); }
+
+  /* Currency badge in account card header (USD / USC), clickable to toggle */
+  .cur-badge {
+    display: inline-block; margin-left: 8px; padding: 2px 8px;
+    font-family: var(--mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.1em; border-radius: 5px; cursor: pointer;
+    border: 1px solid var(--border-strong); vertical-align: 1px;
+    transition: all 0.15s;
+  }
+  .cur-badge.cur-usd { color: var(--green-neon); background: rgba(94,255,160,0.08); }
+  .cur-badge.cur-usc { color: var(--accent);    background: rgba(125,211,252,0.08); }
+  .cur-badge:hover { filter: brightness(1.25); border-color: var(--accent); }
+
+  /* Tiny "USD-eq" tag on aggregate header labels */
+  .agg-tag {
+    display: inline-block; margin-left: 6px; padding: 1px 6px;
+    font-family: var(--mono); font-size: 9px; font-weight: 600;
+    color: var(--text-dim); background: var(--bg-elev);
+    border: 1px solid var(--border); border-radius: 4px;
+    letter-spacing: 0.08em; text-transform: none; vertical-align: 1px;
+  }
+  @media (max-width: 640px) {
+    .cal-stats { grid-template-columns: repeat(2, 1fr); }
+    .cs-val { font-size: 16px; }
+    .cs-sub { font-size: 11px; }
+  }
+  @media (max-width: 640px) {
+    .cal-cell { min-height: 52px; padding: 3px 4px; }
+    .cal-profit { font-size: 11px; }
+    .cal-dd { font-size: 9px; }                          /* v20: 11px → 9px (match desktop ratio) */
+  }
+  .trend-lbl {
+    font-family: var(--mono);
+    font-size: 8px;
+    color: var(--text-faint);
+    margin-top: 3px;
+  }
+
+  /* Stats grid */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 12px;                       /* v19: 8px 14px → 6px 12px */
+    font-family: var(--mono);
+    font-size: 10.5px;                   /* v19: 12px → 10.5px */
+  }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+  }
+  .stat-row .k { color: var(--text-dim); letter-spacing: 0.05em; }
+  .stat-row .v { color: var(--text); }
+  .stat-row .v.pos { color: var(--green); }
+  .stat-row .v.neg { color: var(--red); }
+  .stat-row .v.dim { color: var(--text-faint); }
+
+  /* Footer of card: last update */
+  .acc-footer {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    letter-spacing: 0.05em;
+  }
+
+  /* ========== EMPTY STATE & SETUP ========== */
+  .setup-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    padding: 32px;
+    max-width: 720px;
+    margin: 80px auto;
+  }
+  .setup-card h2 {
+    font-family: var(--display);
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+  }
+  .setup-card .sub {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin-bottom: 24px;
+  }
+  .setup-card label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin: 16px 0 6px;
+  }
+  .setup-card input {
+    width: 100%;
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .setup-card input:focus { outline: none; border-color: var(--accent); }
+  .setup-actions {
+    margin-top: 24px;
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-primary:hover { background: #38bdf8; }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border-strong);
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .btn-ghost:hover { color: var(--text); }
+
+  .help-block {
+    background: var(--bg-elev);
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-top: 14px;
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+  .help-block code {
+    font-family: var(--mono);
+    background: var(--bg);
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: var(--accent);
+    font-size: 12px;
+  }
+
+  .error-msg {
+    background: var(--red-bg);
+    border: 1px solid var(--red);
+    color: var(--red);
+    padding: 12px 16px;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+    margin-top: 16px;
+  }
+
+  /* Mobile */
+  @media (max-width: 640px) {
+    .wrap { padding: 16px; }
+    .brand-title { font-size: 22px; }
+    .accounts { grid-template-columns: 1fr; }
+    .floating-block { grid-template-columns: 1fr 1fr; }
+    .stats-grid { grid-template-columns: 1fr; }
+    .aggregate { grid-template-columns: repeat(2, 1fr); }
+    /* v21: thumb-friendly touch targets on mobile (min 44px hit area) */
+    .refresh-btn { min-height: 40px; padding: 10px 14px; font-size: 13px; }
+    .cal-toggle-btn { min-height: 36px; padding: 8px 14px; font-size: 12px; }
+    .cal-panel-close { min-height: 36px; padding: 8px 14px; font-size: 12px; }
+    .cal-nav button { width: 36px; height: 36px; font-size: 18px; }
+  }
+
+  /* Loading shimmer */
+  .skeleton {
+    background: linear-gradient(90deg, var(--bg-card) 0%, var(--bg-card-hover) 50%, var(--bg-card) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Setup screen (shown if no credentials saved) -->
+  <div id="setup" style="display:none;">
+    <div class="setup-card">
+      <h2>Connect to your Sheety endpoint</h2>
+      <p class="sub">Paste your Sheety project URL and (optional) bearer token. Credentials are stored locally in this browser only — they never leave your device.</p>
+
+      <label>Sheety API URL <span style="color:var(--text-faint);">(status tab)</span></label>
+      <input type="text" id="cfg-url" placeholder="https://api.sheety.co/xxxxx/projectName/sheetName" autocomplete="off">
+
+      <label>History URL <span style="color:var(--text-faint);">(calendar tab, optional)</span></label>
+      <input type="text" id="cfg-histurl" placeholder="https://api.sheety.co/xxxxx/projectName/dailyHistory" autocomplete="off">
+
+      <label>Bearer token (optional)</label>
+      <input type="password" id="cfg-token" placeholder="Leave empty if no auth" autocomplete="off">
+
+      <label>Refresh mode</label>
+      <select id="cfg-mode" style="width:100%; background:var(--bg-elev); color:var(--text); border:1px solid var(--border-strong); border-radius:6px; padding:10px 12px; font-family:var(--mono); font-size:13px;">
+        <option value="auto">Auto-refresh (uses quota while open)</option>
+        <option value="manual" selected>Manual only (most quota-friendly)</option>
+      </select>
+
+      <label>Auto-refresh interval (seconds)</label>
+      <input type="number" id="cfg-interval" value="3600" min="30" max="3600">
+
+      <label style="margin-top:18px; display:flex; align-items:center; justify-content:space-between;">
+        <span>Account Order</span>
+        <span style="color:var(--text-faint); font-size:11px; font-weight:normal;">drag-free · use ▲▼ to reorder</span>
+      </label>
+      <div id="cfg-order-list" style="background:var(--bg-elev); border:1px solid var(--border-strong); border-radius:6px; padding:8px; max-height:200px; overflow-y:auto;">
+        <div style="color:var(--text-dim); font-family:var(--mono); font-size:12px; text-align:center; padding:14px;">no accounts loaded yet — connect first</div>
+      </div>
+      <div class="help-block" style="margin-top:6px;">
+        Re-orders the account cards on the dashboard. Newly discovered accounts auto-append at the end.
+      </div>
+
+      <div class="help-block">
+        <strong style="color: var(--text);">Quota note:</strong> every refresh = 1 GET request to Sheety. Refreshing faster than your EA's write interval just re-reads the same numbers and wastes quota. Match this to your EA interval (e.g. <code>300</code> for 5 min), or pick <strong>Manual only</strong> and use the ↻ button when you want fresh data. <strong>Free tier = 200 req/month.</strong>
+      </div>
+
+      <div class="help-block" style="background:var(--bg); border:1px solid var(--border-strong);">
+        💡 <strong style="color: var(--text);">Zero-quota alternative:</strong> open your Google Sheet directly (web or mobile app) to read data — that uses Google, not Sheety, so it never touches your Sheety quota.
+      </div>
+
+      <div id="setup-error" class="error-msg" style="display:none;"></div>
+
+      <div class="setup-actions">
+        <button class="btn-ghost" onclick="hideSetup()">Cancel</button>
+        <button class="btn-primary" onclick="saveSettings()">Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main dashboard -->
+  <div id="dashboard">
+    <header>
+      <div>
+        <div class="brand">
+          <span class="brand-mark">SG · LIVE</span>
+          <span class="brand-title">Live Trading Monitoring</span>
+        </div>
+        <div class="brand-sub" id="brand-sub">multi-account · real-time · v21</div>
+      </div>
+      <div class="status-bar">
+        <div class="status-item">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">connecting…</span>
+        </div>
+        <div class="status-item" id="quota-info" title="Estimated GET requests this session / today. Helps you watch Sheety quota.">req: --</div>
+        <div class="status-item" id="next-refresh">next: --</div>
+        <button class="refresh-btn" onclick="refresh()">↻ refresh</button>
+        <button class="refresh-btn" onclick="showSetup()">⚙ settings</button>
+      </div>
+    </header>
+
+    <!-- Aggregate -->
+    <div class="aggregate" id="aggregate">
+      <!-- populated by JS -->
+    </div>
+
+    <div class="section-title"><span>accounts</span></div>
+    <div id="account-rows">
+      <!-- account cards populated by JS (v18: card only, calendar moved to panel below) -->
+    </div>
+
+    <!-- v18: shared calendar panel — only one calendar visible at a time -->
+    <div id="active-cal-panel">
+      <div class="cal-panel-head">
+        <div class="cal-panel-title" id="cal-panel-title">— calendar</div>
+        <button class="cal-panel-close" onclick="closeActiveCalendar()">× close</button>
+      </div>
+      <div id="cal-panel-body"><!-- populated by toggleCalendar() --></div>
+    </div>
+
+    <div class="accounts" id="accounts" style="display:none;"></div>
+    <div id="calendars" style="display:none;"></div>
+
+    <div style="margin-top: 40px; text-align: center; font-family: var(--mono); font-size: 10px; color: var(--text-faint); letter-spacing: 0.1em;">
+      data via sheety api · refreshed locally · no server
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ============================================================
+//  Storage helpers — settings persisted in localStorage
+// ============================================================
+const LS_KEY = 'sgm_config_v1';
+
+// Built-in defaults for Ferry's own use. Saved config (if any) overrides these.
+// Token is intentionally NOT hardcoded — that stays in settings.
+const DEFAULTS = {
+  url:      'https://api.sheety.co/6e7fb1fa05c22bbe934fdb08f3be6738/monitoringLiveTrading/sheet1',
+  histUrl:  'https://api.sheety.co/6e7fb1fa05c22bbe934fdb08f3be6738/monitoringLiveTrading/dailyHistory',
+  token:    '',
+  interval: 3600,
+  mode:     'manual'
+};
+
+function loadConfig() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) {
+      // Merge saved over defaults so missing keys still get the new defaults
+      return Object.assign({}, DEFAULTS, JSON.parse(raw));
+    }
+  } catch { /* fall through to defaults */ }
+  // No saved config → return defaults so the user can use the dashboard
+  // immediately. Settings are still pre-filled, the user just opens & refreshes.
+  return Object.assign({}, DEFAULTS);
+}
+function saveConfig(cfg) {
+  localStorage.setItem(LS_KEY, JSON.stringify(cfg));
+}
+
+// ----- Capital per account (keyed by accountId) -----
+// Used as the FIXED basis for all % calculations instead of prior-day balance.
+const CAP_KEY = 'sgm_capital_v1';
+function loadCapitals() {
+  try {
+    const raw = localStorage.getItem(CAP_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+function saveCapital(accId, value) {
+  const caps = loadCapitals();
+  caps[String(accId)] = value;
+  localStorage.setItem(CAP_KEY, JSON.stringify(caps));
+}
+function getCapital(accId) {
+  const caps = loadCapitals();
+  return Number(caps[String(accId)]) || 0;
+}
+// Prompt the user to set capital for an account, then re-render.
+function editCapital(accId) {
+  const cur = getCapital(accId);
+  const input = prompt('Set Capital for account #' + accId + ' (in account currency):', cur || '');
+  if (input === null) return;            // cancelled
+  const val = parseFloat(String(input).replace(/[^0-9.]/g, ''));
+  if (isNaN(val) || val < 0) { alert('Please enter a valid number.'); return; }
+  saveCapital(accId, val);
+  renderAccountRows(_lastRows, _lastHist);  // re-render with new capital basis
+}
+
+// ----- Currency per account (USD or USC) -----
+// USC = USD-Cent broker account. 1 USC = 0.01 USD. Header aggregates use the
+// USD-equivalent of every account; per-card values stay in native units so they
+// match the MT5 panel exactly.
+const CUR_KEY = 'sgm_currency_v1';
+const USC_TO_USD = 0.01;
+function loadCurrencies() {
+  try {
+    const raw = localStorage.getItem(CUR_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+function getCurrency(accId) {
+  const all = loadCurrencies();
+  return all[String(accId)] || 'USD';   // default to USD if not set
+}
+function setCurrency(accId, code) {
+  const all = loadCurrencies();
+  all[String(accId)] = code;
+  localStorage.setItem(CUR_KEY, JSON.stringify(all));
+}
+// Toggle USD ↔ USC for an account, then re-render.
+// v18: single-active calendar panel helpers --------------------------------
+// Click 📅 detail on a card to swap the shared panel below the grid to that
+// account's calendar. Clicking the same card again (or × close in the panel)
+// hides it. Only one calendar is shown at a time.
+
+function toggleCalendar(accId) {
+  if (activeCalAccId === accId) {
+    closeActiveCalendar();
+  } else {
+    openActiveCalendar(accId);
+  }
+}
+
+function openActiveCalendar(accId) {
+  activeCalAccId = accId;
+  const panel  = document.getElementById('active-cal-panel');
+  const body   = document.getElementById('cal-panel-body');
+  const title  = document.getElementById('cal-panel-title');
+  const html   = calHtmlByAccId[accId];
+  const row    = (_lastRows || []).find(r => String(r.accountId || '') === accId);
+  const label  = row ? (row.label || ('#' + accId)) : ('#' + accId);
+  if (body)  body.innerHTML  = html || `<div class="cal-empty">No history yet for this account.${config.histUrl ? '' : ' (set a History URL in settings)'}</div>`;
+  if (title) title.textContent = label + ' — profit calendar';
+  if (panel) {
+    panel.classList.add('shown');
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  applyCalendarVisibility();
+}
+
+function closeActiveCalendar() {
+  activeCalAccId = null;
+  const panel = document.getElementById('active-cal-panel');
+  if (panel) panel.classList.remove('shown');
+  applyCalendarVisibility();
+}
+
+// Sync card buttons + card row highlight to activeCalAccId. Called after every
+// renderAccountRows so state survives data refreshes within the same session.
+function applyCalendarVisibility() {
+  const ids = (_lastRows || []).map(r => String(r.accountId || '')).filter(Boolean);
+  ids.forEach(id => {
+    const btnEl = document.getElementById('cal-btn-' + id);
+    const rowEl = document.getElementById('acct-row-' + id);
+    const isActive = (activeCalAccId === id);
+    if (btnEl) {
+      btnEl.textContent = isActive ? '× hide' : '📅 detail';
+      btnEl.classList.toggle('active', isActive);
+    }
+    if (rowEl) rowEl.classList.toggle('active-cal', isActive);
+  });
+  // If the active account vanished (deleted from settings) close the panel.
+  if (activeCalAccId && !ids.includes(activeCalAccId)) {
+    closeActiveCalendar();
+  }
+}
+
+function toggleCurrency(accId) {
+  const cur = getCurrency(accId);
+  setCurrency(accId, cur === 'USD' ? 'USC' : 'USD');
+  renderAggregate(_lastRows);              // header reflects new conversion
+  renderAccountRows(_lastRows, _lastHist); // card shows new currency tag
+}
+// Convert a native value to USD-equivalent based on the account's currency.
+function toUSD(value, accId) {
+  const v = Number(value) || 0;
+  return getCurrency(accId) === 'USC' ? v * USC_TO_USD : v;
+}
+// Currency symbol for native display ($ for USD, ¢ for USC).
+function curSym(accId) {
+  return getCurrency(accId) === 'USC' ? '¢' : '$';
+}
+// Format money in the account's native currency.
+function fmtNative(value, accId) {
+  const v = Number(value) || 0;
+  const sym = curSym(accId);
+  const sign = v < 0 ? '-' : '';
+  return sign + sym + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtNativeSigned(value, accId) {
+  const v = Number(value) || 0;
+  const sym = curSym(accId);
+  const sign = v >= 0 ? '+' : '-';
+  return sign + sym + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// ============================================================
+//  Account order (v16) — user-defined ordering of accounts in
+//  the dashboard. Stored as an array of accountIds (strings).
+//  Accounts not in this list are appended at the end (default
+//  newest-discovered-last). Persisted in localStorage, set in
+//  the Settings modal via up/down buttons.
+// ============================================================
+const ORDER_KEY = 'sgm_acct_order_v1';
+function loadOrder() {
+  try {
+    const raw = localStorage.getItem(ORDER_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.map(String) : [];
+  } catch { return []; }
+}
+function saveOrder(arr) {
+  const clean = (Array.isArray(arr) ? arr : []).map(String);
+  localStorage.setItem(ORDER_KEY, JSON.stringify(clean));
+}
+
+// Sort rows according to the saved order. Accounts not in the order list
+// (newly discovered, unconfigured) go to the end in their original order.
+function applyAccountOrder(rows) {
+  const order = loadOrder();
+  if (!order.length) return rows;   // no custom order → leave as-is
+  const idx = new Map();
+  order.forEach((id, i) => idx.set(String(id), i));
+  // Stable sort: known IDs by their saved index; unknown IDs sorted to end.
+  return [...rows].sort((a, b) => {
+    const ia = idx.has(String(a.accountId)) ? idx.get(String(a.accountId)) : Infinity;
+    const ib = idx.has(String(b.accountId)) ? idx.get(String(b.accountId)) : Infinity;
+    return ia - ib;
+  });
+}
+
+let config = loadConfig();
+let refreshTimer = null;
+let countdownTimer = null;
+let nextRefreshAt = 0;
+
+// ============================================================
+//  Request counter — tracks GET requests to watch Sheety quota.
+//  Persisted per-day in localStorage so it survives reloads.
+// ============================================================
+const REQ_KEY = 'sgm_reqcount_v1';
+let sessionReqs = 0;   // requests since this page load
+
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
+}
+function loadReqCount() {
+  try {
+    const raw = localStorage.getItem(REQ_KEY);
+    if (!raw) return { day: todayStr(), count: 0 };
+    const o = JSON.parse(raw);
+    if (o.day !== todayStr()) return { day: todayStr(), count: 0 };  // new day → reset
+    return o;
+  } catch { return { day: todayStr(), count: 0 }; }
+}
+function bumpReqCount() {
+  let o = loadReqCount();
+  o.count++;
+  sessionReqs++;
+  localStorage.setItem(REQ_KEY, JSON.stringify(o));
+  updateQuotaDisplay();
+}
+function updateQuotaDisplay() {
+  const o = loadReqCount();
+  const el = document.getElementById('quota-info');
+  if (el) el.textContent = `req: ${sessionReqs} session · ${o.count} today`;
+}
+
+// ============================================================
+//  Setup / settings UI
+// ============================================================
+function showSetup() {
+  document.getElementById('setup').style.display = 'block';
+  document.getElementById('dashboard').style.display = 'none';
+  // Pre-fill from saved config if any, else from DEFAULTS so the form is
+  // ready to use on first open (URLs already filled, just add token).
+  const src = config || DEFAULTS;
+  document.getElementById('cfg-url').value = src.url || DEFAULTS.url;
+  document.getElementById('cfg-histurl').value = src.histUrl || DEFAULTS.histUrl;
+  document.getElementById('cfg-token').value = src.token || '';
+  document.getElementById('cfg-interval').value = src.interval || DEFAULTS.interval;
+  document.getElementById('cfg-mode').value = src.mode || DEFAULTS.mode;
+  renderOrderList();   // populate the account-order section with current accounts
+}
+function hideSetup() {
+  if (!config) return;
+  document.getElementById('setup').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+}
+function saveSettings() {
+  const url = document.getElementById('cfg-url').value.trim();
+  const histUrl = document.getElementById('cfg-histurl').value.trim();
+  const token = document.getElementById('cfg-token').value.trim();
+  const interval = parseInt(document.getElementById('cfg-interval').value) || DEFAULTS.interval;
+  const mode = document.getElementById('cfg-mode').value || DEFAULTS.mode;
+  const err = document.getElementById('setup-error');
+  err.style.display = 'none';
+
+  if (!url || !url.startsWith('https://api.sheety.co/')) {
+    err.textContent = 'URL must start with https://api.sheety.co/';
+    err.style.display = 'block';
+    return;
+  }
+  if (histUrl && !histUrl.startsWith('https://api.sheety.co/')) {
+    err.textContent = 'History URL must start with https://api.sheety.co/ (or leave empty)';
+    err.style.display = 'block';
+    return;
+  }
+  config = { url, histUrl, token, interval, mode };
+  saveConfig(config);
+  // NOTE: account order is saved live by moveOrderItem() — no extra work here.
+  document.getElementById('setup').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+  refresh();
+}
+
+// ============================================================
+//  Account-order UI (renders inside Settings modal)
+// ============================================================
+// Render the order list using accounts we've seen in the last fetch.
+// If no accounts yet (first open, never fetched), show a hint instead.
+function renderOrderList() {
+  const cont = document.getElementById('cfg-order-list');
+  if (!cont) return;
+  const rows = Array.isArray(_lastRows) ? _lastRows : [];
+  if (!rows.length) {
+    cont.innerHTML = `<div style="color:var(--text-dim); font-family:var(--mono); font-size:12px; text-align:center; padding:14px;">no accounts loaded yet — connect first, then re-open settings</div>`;
+    return;
+  }
+  // Apply current order so the list matches what's on the dashboard.
+  const ordered = applyAccountOrder(rows);
+  cont.innerHTML = ordered.map((r, i) => {
+    const id = String(r.accountId || '');
+    const label = String(r.label || ('#' + id));
+    const cur = getCurrency(id);
+    const isFirst = i === 0;
+    const isLast  = i === ordered.length - 1;
+    return `
+      <div class="order-row" data-acc="${id}" style="display:flex; align-items:center; gap:8px; padding:6px 8px; background:var(--bg); border:1px solid var(--border); border-radius:5px; margin-bottom:4px;">
+        <span style="display:inline-block; width:22px; text-align:center; color:var(--text-faint); font-family:var(--mono); font-size:11px;">${i + 1}</span>
+        <span style="flex:1; font-family:var(--mono); font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+          ${label} <span style="color:var(--text-faint);">· ${id} · ${cur}</span>
+        </span>
+        <button onclick="moveOrderItem('${id}', -1)" ${isFirst ? 'disabled' : ''}
+                style="background:var(--bg-elev); color:${isFirst ? 'var(--text-faint)' : 'var(--text)'}; border:1px solid var(--border-strong); border-radius:4px; width:28px; height:24px; cursor:${isFirst ? 'not-allowed' : 'pointer'}; font-size:12px; line-height:1;">▲</button>
+        <button onclick="moveOrderItem('${id}', +1)" ${isLast ? 'disabled' : ''}
+                style="background:var(--bg-elev); color:${isLast ? 'var(--text-faint)' : 'var(--text)'}; border:1px solid var(--border-strong); border-radius:4px; width:28px; height:24px; cursor:${isLast ? 'not-allowed' : 'pointer'}; font-size:12px; line-height:1;">▼</button>
+      </div>`;
+  }).join('');
+}
+
+// Move an account up (-1) or down (+1) in the order. Persists immediately so
+// the user sees the change reflected in the list without needing to save.
+function moveOrderItem(accId, delta) {
+  const rows = Array.isArray(_lastRows) ? _lastRows : [];
+  if (!rows.length) return;
+  // Build the current order (saved order applied; newly seen IDs appended)
+  const ordered = applyAccountOrder(rows);
+  const ids = ordered.map(r => String(r.accountId));
+  const i = ids.indexOf(String(accId));
+  if (i < 0) return;
+  const j = i + delta;
+  if (j < 0 || j >= ids.length) return;
+  // Swap and save
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  saveOrder(ids);
+  renderOrderList();   // refresh modal list
+}
+
+// ============================================================
+//  Fetch + render
+// ============================================================
+async function fetchData() {
+  if (!config) return null;
+  const headers = { 'Content-Type': 'application/json' };
+  if (config.token) headers['Authorization'] = 'Bearer ' + config.token;
+  bumpReqCount();   // each fetch = 1 GET request against Sheety quota
+  const res = await fetch(config.url, { headers });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const json = await res.json();
+  // Sheety wraps response in a key matching the sheet name
+  const key = Object.keys(json)[0];
+  return Array.isArray(json[key]) ? json[key] : [];
+}
+
+// Fetch the daily-history tab (for the calendar). Returns [] if not configured.
+async function fetchHistory() {
+  if (!config || !config.histUrl) return [];
+  const headers = { 'Content-Type': 'application/json' };
+  if (config.token) headers['Authorization'] = 'Bearer ' + config.token;
+  bumpReqCount();   // history read = another GET against quota
+  try {
+    const res = await fetch(config.histUrl, { headers });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const json = await res.json();
+    const key = Object.keys(json)[0];
+    return Array.isArray(json[key]) ? json[key] : [];
+  } catch (e) {
+    console.warn('history fetch failed:', e);
+    return [];
+  }
+}
+
+function fmtMoney(v) {
+  if (v == null || isNaN(v)) return '—';
+  const sign = v < 0 ? '-' : '';
+  const abs = Math.abs(v);
+  return sign + '$' + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtNum(v, dp=2) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+}
+function fmtPct(v) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toFixed(2) + '%';
+}
+function fmtSigned(v) {
+  if (v == null || isNaN(v)) return '—';
+  const sign = v >= 0 ? '+' : '';
+  return sign + fmtMoney(v).replace('-', '-');
+}
+function timeAgo(ts) {
+  if (!ts) return '—';
+  // Try parsing "YYYY.MM.DD HH:MM:SS" or "YYYY.MM.DD HH:MM"
+  const norm = ts.replace(/\./g, '-');
+  const d = new Date(norm);
+  if (isNaN(d.getTime())) return ts;
+  const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (sec < 60) return sec + 's ago';
+  if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+  if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+  return Math.floor(sec / 86400) + 'd ago';
+}
+
+function classifyAccount(dd_pct) {
+  const dd = Number(dd_pct) || 0;
+  if (dd >= 20) return 'danger';
+  if (dd >= 8) return 'warn';
+  return 'ok';
+}
+function statusLabel(cls) {
+  if (cls === 'danger') return 'high dd';
+  if (cls === 'warn') return 'watch';
+  return 'healthy';
+}
+
+function renderAggregate(rows) {
+  const agg = document.getElementById('aggregate');
+  if (!rows.length) { agg.innerHTML = ''; return; }
+
+  // All sums converted to USD-equivalent (USC × 0.01). Per-account values stay
+  // native in the cards; only the global header is normalized so totals make
+  // sense across mixed-currency accounts.
+  const totBal = rows.reduce((s, r) => s + toUSD(r.balance,  r.accountId), 0);
+  const totEq  = rows.reduce((s, r) => s + toUSD(r.equity,   r.accountId), 0);
+  const totFl  = rows.reduce((s, r) => s + toUSD(r.floating, r.accountId), 0);
+  const totDp  = rows.reduce((s, r) => s + toUSD(r.dailyPl,  r.accountId), 0);
+  const totPos = rows.reduce((s, r) => s + (+r.openPos || 0), 0);
+  const danger = rows.filter(r => classifyAccount(r.ddPct) === 'danger').length;
+  const warn = rows.filter(r => classifyAccount(r.ddPct) === 'warn').length;
+
+  // Breakdown: how many USD vs USC accounts, for tiny subtitle on the header
+  const usdN = rows.filter(r => getCurrency(r.accountId) === 'USD').length;
+  const uscN = rows.length - usdN;
+  const mixTag = (usdN > 0 && uscN > 0)
+    ? `${usdN} USD · ${uscN} USC (×0.01)`
+    : (uscN > 0 ? `${uscN} USC (×0.01)` : `${usdN} USD`);
+
+  agg.innerHTML = `
+    <div class="agg-cell">
+      <div class="agg-label">accounts</div>
+      <div class="agg-value">${rows.length}</div>
+      <div class="agg-sub">${danger} danger · ${warn} watch · ${rows.length - danger - warn} ok</div>
+    </div>
+    <div class="agg-cell">
+      <div class="agg-label">total equity <span class="agg-tag">USD-eq</span></div>
+      <div class="agg-value">${fmtMoney(totEq)}</div>
+      <div class="agg-sub">balance ${fmtMoney(totBal)} · ${mixTag}</div>
+    </div>
+    <div class="agg-cell">
+      <div class="agg-label">total floating <span class="agg-tag">USD-eq</span></div>
+      <div class="agg-value ${totFl >= 0 ? 'pos' : 'neg'}">${fmtSigned(totFl)}</div>
+      <div class="agg-sub">across ${totPos} positions</div>
+    </div>
+    <div class="agg-cell">
+      <div class="agg-label">today P/L <span class="agg-tag">USD-eq</span></div>
+      <div class="agg-value ${totDp >= 0 ? 'pos' : 'neg'}">${fmtSigned(totDp)}</div>
+      <div class="agg-sub">all accounts combined</div>
+    </div>
+  `;
+}
+
+function buildAccountCard(r) {
+    const cls = classifyAccount(r.ddPct);
+    const floating = Number(r.floating) || 0;
+    const dailyPl = Number(r.dailyPl) || 0;
+    const ddPct = Number(r.ddPct) || 0;
+    const ddBarPct = Math.min(100, ddPct * 2);  // visual scale: 50% dd = full bar
+    const winrate = Number(r.dailyWinrate) || 0;
+    const dailyDDm = Number(r.dailyMaxDdMoney) || 0;
+    const accId = String(r.accountId || '');
+    const capital = getCapital(accId);
+    const cur = getCurrency(accId);   // 'USD' or 'USC' (default USD)
+    // % basis = fixed Capital (fallback to balance if capital not set yet).
+    // Both capital and balance are in the account's NATIVE currency, so ratios
+    // work whether the account is USD or USC.
+    const basis = capital > 0 ? capital : (Number(r.balance) || 0);
+    const dailyPlPct = (basis > 0) ? (dailyPl / basis * 100) : 0;
+    const dailyDDp = (basis > 0 && dailyDDm > 0) ? (dailyDDm / basis * 100) : (Number(r.dailyMaxDdPct) || 0);
+
+    return `
+      <div class="account-card ${cls}">
+        <div class="acc-header">
+          <div>
+            <div class="acc-label">${escapeHtml(r.label || 'Unnamed')} <span class="cur-badge cur-${cur.toLowerCase()}" onclick="toggleCurrency('${accId}')" title="Click to toggle USD/USC">${cur}</span></div>
+            <div class="acc-meta">#${escapeHtml(String(r.accountId || '—'))} · ${escapeHtml(r.broker || '—')} · ${escapeHtml(r.symbol || '—')}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="acc-badge ${cls}">${statusLabel(cls)}</span>
+            <button class="cal-toggle-btn" id="cal-btn-${accId}" onclick="toggleCalendar('${accId}')" title="Show/hide calendar">📅 detail</button>
+          </div>
+        </div>
+
+        <div class="equity-block">
+          <div class="equity-row">
+            <span class="equity-label">equity</span>
+            <span class="equity-value">${fmtNative(r.equity, accId)}</span>
+          </div>
+          <div class="balance-line">
+            <span>balance</span><span class="v">${fmtNative(r.balance, accId)}</span>
+          </div>
+          <div class="balance-line">
+            <span>capital</span>
+            <span class="v cap-edit" onclick="editCapital('${accId}')" title="Click to set capital">${capital > 0 ? fmtNative(capital, accId) : '⚙ set'}</span>
+          </div>
+        </div>
+
+        <div class="floating-block">
+          <div class="float-cell">
+            <div class="lbl">floating</div>
+            <div class="val ${floating >= 0 ? 'pos' : 'neg'}">${fmtNativeSigned(floating, accId)}</div>
+          </div>
+          <div class="float-cell">
+            <div class="lbl">drawdown now</div>
+            <div class="val ${cls === 'danger' ? 'neg' : cls === 'warn' ? 'warn' : ''}">${fmtPct(ddPct)}</div>
+            <div class="dd-bar"><div class="dd-bar-fill" style="width:${ddBarPct}%"></div></div>
+          </div>
+        </div>
+
+        <div class="floating-block">
+          <div class="float-cell">
+            <div class="lbl">today P/L</div>
+            <div class="val ${dailyPl >= 0 ? 'pos' : 'neg'}">${fmtNativeSigned(dailyPl, accId)}</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--text-faint);margin-top:2px;">${dailyPlPct !== 0 ? (dailyPlPct >= 0 ? '+' : '') + dailyPlPct.toFixed(2) + '%' : ''}</div>
+          </div>
+          <div class="float-cell">
+            <div class="lbl">today max DD</div>
+            <div class="val ${dailyDDp >= 3 ? 'neg' : dailyDDp >= 1 ? 'warn' : 'dim'}">${dailyDDm > 0 ? '-' + curSym(accId) + Math.abs(dailyDDm).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--text-faint);margin-top:2px;">${dailyDDp > 0 ? fmtPct(dailyDDp) : ''}</div>
+          </div>
+        </div>
+
+        ${renderTrend(r.dailyTrend)}
+
+        <div class="stats-grid">
+          <div class="stat-row"><span class="k">open pos</span><span class="v">${r.openPos ?? '—'}</span></div>
+          <div class="stat-row"><span class="k">winrate</span><span class="v">${fmtPct(winrate)}</span></div>
+          <div class="stat-row"><span class="k">baskets today</span><span class="v">${r.dailyBaskets ?? '—'}</span></div>
+          <div class="stat-row"><span class="k">stop-out</span><span class="v dim">${r.stopoutPrice && +r.stopoutPrice > 0 ? fmtNum(r.stopoutPrice, 2) : '—'}</span></div>
+          <div class="stat-row"><span class="k">status</span><span class="v">${escapeHtml(r.eaStatus || '—')}</span></div>
+        </div>
+
+        <div class="acc-footer">
+          <span>last update</span>
+          <span>${timeAgo(r.lastUpdate)}</span>
+        </div>
+      </div>
+    `;
+}
+
+// Render account+calendar pairs: each row has the account card (left, narrow)
+// and that account's profit calendar (right, wide). Stacks on small screens.
+function renderAccountRows(rows, hist) {
+  const cont = document.getElementById('account-rows');
+  if (!rows.length) {
+    cont.innerHTML = `<div style="padding: 60px; text-align: center; color: var(--text-dim); font-family: var(--mono); font-size: 13px;">no accounts found in sheet · check sheety endpoint</div>`;
+    return;
+  }
+
+  // Group history by accountId (may be empty if no history URL)
+  const histByAcc = {};
+  (hist || []).forEach(h => {
+    const id = String(h.accountId || '');
+    if (id) (histByAcc[id] = histByAcc[id] || []).push(h);
+  });
+  // Cache the ORIGINAL (unsorted) rows so the Settings modal can list and
+  // reorder accounts. Sorting only happens in the render output below.
+  _lastRows = rows; _lastHist = hist || [];
+
+  // v16: apply user-defined account order before rendering.
+  const orderedRows = applyAccountOrder(rows);
+
+  // v18: render is now card-only. Calendars get rendered into calHtmlByAccId
+  // so the shared panel below the grid can swap to any account instantly.
+  calHtmlByAccId = {};
+  cont.innerHTML = orderedRows.map(r => {
+    const id = String(r.accountId || '');
+    const card = buildAccountCard(r);
+    const hrows = histByAcc[id] || [];
+    calHtmlByAccId[id] = hrows.length
+      ? renderOneCalendar(id, r.label || ('#' + id), hrows)
+      : `<div class="cal-empty">No history yet for this account.${config.histUrl ? '' : ' (set a History URL in settings)'}</div>`;
+    return `<div class="acct-row" id="acct-row-${id}">${card}</div>`;
+  }).join('');
+
+  // v18: if a calendar panel is currently open, refresh its content too
+  // (data may have changed during refresh — newer history rows, etc.)
+  if (activeCalAccId && calHtmlByAccId[activeCalAccId]) {
+    const body = document.getElementById('cal-panel-body');
+    if (body) body.innerHTML = calHtmlByAccId[activeCalAccId];
+  }
+
+  // v17/v18: re-apply calendar visibility after re-render so toggle state
+  // persists across data refreshes, currency switches, capital edits, etc.
+  applyCalendarVisibility();
+}
+
+// Render daily P&L + max-DD trend charts from the EA's dailyTrend string.
+// Format per day: "MM.DD|profit|maxddMoney|profitPct|maxddPct".
+// The EA sends NEWEST-FIRST, so we reverse() → OLDEST on the left, NEWEST on
+// the right. Using send order (not date math) avoids year-wrap edge cases.
+function renderTrend(trendStr) {
+  if (!trendStr) return '';
+  let days = String(trendStr).split(';').map(s => {
+    const p = s.split('|');
+    return {
+      date: p[0],
+      profit: Number(p[1]) || 0,
+      dd: Number(p[2]) || 0,
+      profitPct: Number(p[3]) || 0,
+      ddPct: Number(p[4]) || 0
+    };
+  }).filter(d => d.date);
+  if (!days.length) return '';
+
+  // Sort by date so OLDEST is left, NEWEST is right — regardless of the order
+  // the EA sent them in. Parse MM.DD; if all in the same year this is exact.
+  // To survive a year boundary in a rolling window, days whose month is much
+  // greater than the latest month are treated as the previous year.
+  const parsed = days.map(d => {
+    const [m, dd] = d.date.split('.').map(Number);
+    return { ...d, _m: m || 0, _d: dd || 0 };
+  });
+  const maxM = Math.max(...parsed.map(x => x._m));
+  parsed.forEach(x => { x._key = (x._m + (x._m <= maxM - 6 ? 12 : 0)) * 100 + x._d; });
+  parsed.sort((a, b) => a._key - b._key);
+  days = parsed;
+
+  // --- P/L bars (green/red) ---
+  const maxAbsPl = Math.max(...days.map(d => Math.abs(d.profit)), 1);
+  const plBars = days.map(d => {
+    const h = Math.max(3, Math.round(Math.abs(d.profit) / maxAbsPl * 42));
+    const pos = d.profit >= 0;
+    const tip = `${d.date}: ${d.profit >= 0 ? '+' : ''}${d.profit.toFixed(0)} (${d.profitPct >= 0 ? '+' : ''}${d.profitPct.toFixed(2)}%)`;
+    return `<div class="trend-col" title="${tip}">
+              <div class="trend-bar ${pos ? 'pos' : 'neg'}" style="height:${h}px;"></div>
+              <div class="trend-lbl">${(d.date.split('.')[1] || '')}</div>
+            </div>`;
+  }).join('');
+
+  // --- Max-DD bars (always red, magnitude = severity) ---
+  const maxAbsDd = Math.max(...days.map(d => Math.abs(d.dd)), 1);
+  const ddBars = days.map(d => {
+    const h = Math.max(3, Math.round(Math.abs(d.dd) / maxAbsDd * 42));
+    const tip = `${d.date}: max DD -${d.dd.toFixed(0)} (${d.ddPct.toFixed(2)}%)`;
+    return `<div class="trend-col" title="${tip}">
+              <div class="trend-bar dd" style="height:${h}px;"></div>
+              <div class="trend-lbl">${(d.date.split('.')[1] || '')}</div>
+            </div>`;
+  }).join('');
+
+  return `
+    <div class="trend-wrap">
+      <div class="trend-title">daily P/L trend · ${days.length}d</div>
+      <div class="trend-chart">${plBars}</div>
+    </div>
+    <div class="trend-wrap">
+      <div class="trend-title" style="color:var(--red);">daily max DD · ${days.length}d</div>
+      <div class="trend-chart">${ddBars}</div>
+    </div>
+  `;
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function setStatus(state, msg) {
+  const dot = document.getElementById('status-dot');
+  const txt = document.getElementById('status-text');
+  dot.className = 'status-dot ' + (state === 'live' ? 'live' : state === 'error' ? 'error' : '');
+  txt.textContent = msg;
+}
+
+// ============================================================
+//  Profit calendar (per account) — fed by the DailyHistory tab
+// ============================================================
+const calMonthState = {};   // accountId → 'YYYY-M' (0-based month) currently shown
+let _lastRows = [], _lastHist = [];   // cached for re-render on month nav
+
+// v18: calendar panel state — only ONE active calendar at a time.
+// activeCalAccId is the accountId currently shown in the panel (null = hidden).
+// calHtmlByAccId caches the rendered calendar HTML per account so switching
+// between accounts in the panel is instant. Rebuilt on every renderAccountRows.
+// State is in-memory only and resets on page reload.
+let activeCalAccId = null;
+let calHtmlByAccId = {};
+
+function monthKey(y, m) { return y + '-' + m; }
+
+function parseHistDate(s) {
+  if (!s) return null;
+  const p = String(s).split('.').map(Number);   // EA writes "YYYY.MM.DD"
+  if (p.length < 3) return null;
+  return { y: p[0], m: p[1] - 1, d: p[2] };       // m 0-based
+}
+
+function renderCalendars(rows, hist) {
+  _lastRows = rows; _lastHist = hist;
+  const cont = document.getElementById('calendars');
+  if (!hist || !hist.length) {
+    cont.innerHTML = `<div class="section-title"><span>profit calendar</span></div>
+      <div class="cal-empty">No history yet. The calendar fills in once the EA has
+      written daily history (v2.10+) with a History URL configured.</div>`;
+    return;
+  }
+  const byAcc = {};
+  hist.forEach(h => {
+    const id = String(h.accountId || '');
+    if (!id) return;
+    (byAcc[id] = byAcc[id] || []).push(h);
+  });
+  const labelOf = {};
+  rows.forEach(r => { labelOf[String(r.accountId)] = r.label; });
+
+  let html = `<div class="section-title"><span>profit calendar</span></div>`;
+  Object.keys(byAcc).forEach(id => {
+    const label = labelOf[id] || (byAcc[id][0] && byAcc[id][0].label) || ('#' + id);
+    html += renderOneCalendar(id, label, byAcc[id]);
+  });
+  cont.innerHTML = html;
+}
+
+function renderOneCalendar(accId, label, histRows) {
+  const capital = getCapital(accId);   // fixed basis for % (0 = use stored %)
+  const map = {};
+  let latest = null;
+  histRows.forEach(h => {
+    const pd = parseHistDate(h.date);
+    if (!pd) return;
+    const profit = Number(h.profit) || 0;
+    const ddMoney = Number(h.maxDdMoney) || 0;
+    // If capital is set, derive % from it; otherwise fall back to stored %
+    const profitPct = capital > 0 ? (profit / capital * 100) : (Number(h.profitPct) || 0);
+    const ddPct = capital > 0 ? (ddMoney / capital * 100) : (Number(h.maxDdPct) || 0);
+    map[monthKey(pd.y, pd.m) + '-' + pd.d] = { profit, profitPct, ddPct, ddMoney };
+    if (!latest || (pd.y * 100 + pd.m) > (latest.y * 100 + latest.m)) latest = pd;
+  });
+
+  const now = new Date();
+  let cur = calMonthState[accId];
+  let y, m;
+  if (cur) { [y, m] = cur.split('-').map(Number); }
+  else if (latest) { y = latest.y; m = latest.m; }
+  else { y = now.getFullYear(); m = now.getMonth(); }
+  calMonthState[accId] = monthKey(y, m);
+
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const firstDay = new Date(y, m, 1).getDay();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+
+  let monthProfit = 0, monthDays = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const cell = map[monthKey(y, m) + '-' + d];
+    if (cell) { monthProfit += cell.profit; monthDays++; }
+  }
+
+  const wd = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+  let cells = wd.map(w => `<div class="cal-wd">${w}</div>`).join('');
+  for (let i = 0; i < firstDay; i++) cells += `<div class="cal-cell empty"></div>`;
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const cell = map[monthKey(y, m) + '-' + d];
+    if (!cell) {
+      cells += `<div class="cal-cell"><div class="cal-day">${d}</div></div>`;
+    } else {
+      const pos = cell.profit >= 0;
+      const tip = `${monthNames[m]} ${d}: ${pos?'+':''}${cell.profit.toFixed(0)} (${cell.profitPct>=0?'+':''}${cell.profitPct.toFixed(2)}%) · maxDD -${cell.ddMoney.toFixed(0)} (${cell.ddPct.toFixed(2)}%)`;
+      cells += `<div class="cal-cell ${pos?'pos':'neg'}" title="${tip}">
+                  <div class="cal-day">${d}</div>
+                  <div class="cal-line first">
+                    <span class="cal-profit ${pos?'pos':'neg'}">${pos?'+':''}${curSym(accId)}${Math.round(cell.profit).toLocaleString()}</span>
+                    <span class="cal-profit ${pos?'pos':'neg'}">${cell.profitPct>=0?'+':''}${cell.profitPct.toFixed(2)}%</span>
+                  </div>
+                  <div class="cal-line">
+                    <span class="cal-dd">-${curSym(accId)}${Math.round(cell.ddMoney).toLocaleString()}</span>
+                    <span class="cal-dd">${cell.ddPct.toFixed(2)}%</span>
+                  </div>
+                </div>`;
+    }
+  }
+
+  // ----- Monthly statistics (for the displayed month) -----
+  let bestDay = null, worstDay = null, worstDD = null;
+  let winDays = 0, lossDays = 0, sumProfit = 0, sumProfitPct = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const cell = map[monthKey(y, m) + '-' + d];
+    if (!cell) continue;
+    sumProfit += cell.profit;
+    sumProfitPct += cell.profitPct;
+    if (cell.profit >= 0) winDays++; else lossDays++;
+    if (!bestDay || cell.profit > bestDay.profit) bestDay = { d, ...cell };
+    if (!worstDay || cell.profit < worstDay.profit) worstDay = { d, ...cell };
+    if (!worstDD || cell.ddPct > worstDD.ddPct) worstDD = { d, ...cell };
+  }
+  const winRate = (winDays + lossDays > 0) ? (winDays / (winDays + lossDays) * 100) : 0;
+  const avgDay = monthDays > 0 ? sumProfit / monthDays : 0;
+  const avgDayPct = monthDays > 0 ? sumProfitPct / monthDays : 0;
+
+  let statsHtml = '';
+  if (monthDays > 0) {
+    const mn = monthNames[m];
+    const sgn = v => (v >= 0 ? '+' : '');
+    statsHtml = `
+      <div class="cal-stats">
+        <div class="cal-stat">
+          <div class="cs-lbl">month P/L</div>
+          <div class="cs-val ${sumProfit>=0?'pos':'neg'}">${sgn(sumProfit)}${curSym(accId)}${Math.abs(Math.round(sumProfit)).toLocaleString()}</div>
+          <div class="cs-sub">${sgn(sumProfitPct)}${sumProfitPct.toFixed(2)}% · ${monthDays} days</div>
+        </div>
+        <div class="cal-stat">
+          <div class="cs-lbl">best day</div>
+          <div class="cs-val pos">${bestDay?('+'+curSym(accId)+Math.round(bestDay.profit).toLocaleString()):'—'}</div>
+          <div class="cs-sub">${bestDay?(mn+' '+bestDay.d+' · '+sgn(bestDay.profitPct)+bestDay.profitPct.toFixed(2)+'%'):''}</div>
+        </div>
+        <div class="cal-stat">
+          <div class="cs-lbl">worst day</div>
+          <div class="cs-val ${worstDay&&worstDay.profit<0?'neg':'dim'}">${worstDay?(sgn(worstDay.profit)+curSym(accId)+Math.abs(Math.round(worstDay.profit)).toLocaleString()):'—'}</div>
+          <div class="cs-sub">${worstDay?(mn+' '+worstDay.d+' · '+sgn(worstDay.profitPct)+worstDay.profitPct.toFixed(2)+'%'):''}</div>
+        </div>
+        <div class="cal-stat">
+          <div class="cs-lbl">max DD (month)</div>
+          <div class="cs-val neg">${worstDD?('-'+curSym(accId)+Math.round(worstDD.ddMoney).toLocaleString()):'—'}</div>
+          <div class="cs-sub">${worstDD?(mn+' '+worstDD.d+' · '+worstDD.ddPct.toFixed(2)+'%'):''}</div>
+        </div>
+        <div class="cal-stat">
+          <div class="cs-lbl">win rate</div>
+          <div class="cs-val">${winRate.toFixed(0)}%</div>
+          <div class="cs-sub">${winDays}W · ${lossDays}L</div>
+        </div>
+        <div class="cal-stat">
+          <div class="cs-lbl">avg / day</div>
+          <div class="cs-val ${avgDay>=0?'pos':'neg'}">${sgn(avgDay)}${curSym(accId)}${Math.abs(Math.round(avgDay)).toLocaleString()}</div>
+          <div class="cs-sub">${sgn(avgDayPct)}${avgDayPct.toFixed(2)}% · ${monthDays} days</div>
+        </div>
+      </div>`;
+  }
+
+  const monthTotCls = monthProfit >= 0 ? 'pos' : 'neg';
+  return `
+    <div class="cal-wrap">
+      <div class="cal-header">
+        <div class="cal-title">
+          ${escapeHtml(label)} <span class="cal-acc">#${escapeHtml(accId)}</span>
+          <span class="cal-legend-inline" aria-label="Color legend">
+            <span class="cal-legend-item"><span class="cal-legend-dot pos"></span> profit</span>
+            <span class="cal-legend-item"><span class="cal-legend-dot neg"></span> max DD</span>
+          </span>
+        </div>
+        <div class="cal-nav">
+          <button onclick="calNav('${accId}',-1)">‹</button>
+          <span class="cal-month">${monthNames[m]} ${y}</span>
+          <button onclick="calNav('${accId}',1)">›</button>
+        </div>
+        <div class="cal-total ${monthTotCls}">${monthProfit>=0?'+':''}${curSym(accId)}${Math.abs(Math.round(monthProfit)).toLocaleString()} <span>· ${monthDays}d</span></div>
+      </div>
+      <div class="cal-grid">${cells}</div>
+      ${statsHtml}
+    </div>
+  `;
+}
+
+function calNav(accId, delta) {
+  const cur = calMonthState[accId];
+  let [y, m] = cur.split('-').map(Number);
+  m += delta;
+  if (m < 0) { m = 11; y--; }
+  if (m > 11) { m = 0; y++; }
+  calMonthState[accId] = monthKey(y, m);
+  renderAccountRows(_lastRows, _lastHist);   // re-render pairs from cached data
+}
+
+async function refresh() {
+  if (!config) { showSetup(); return; }
+  setStatus('', 'fetching…');
+  try {
+    const rows = await fetchData();
+    renderAggregate(rows);
+    // Fetch history (if configured) then render account+calendar pairs
+    let hist = [];
+    if (config.histUrl) hist = await fetchHistory();
+    renderAccountRows(rows, hist);
+    setStatus('live', 'live · ' + rows.length + ' accounts');
+    scheduleNext();
+  } catch (e) {
+    setStatus('error', 'error: ' + e.message);
+    console.error(e);
+  }
+}
+
+function scheduleNext() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  if (countdownTimer) clearInterval(countdownTimer);
+
+  // Manual mode: do not schedule any auto-refresh — user clicks ↻ to update.
+  if ((config.mode || 'manual') === 'manual') {
+    nextRefreshAt = 0;
+    document.getElementById('next-refresh').textContent = 'manual mode';
+    return;
+  }
+
+  const ms = (config.interval || DEFAULTS.interval) * 1000;
+  nextRefreshAt = Date.now() + ms;
+  refreshTimer = setTimeout(refresh, ms);
+  updateCountdown();
+  countdownTimer = setInterval(updateCountdown, 1000);
+}
+
+function updateCountdown() {
+  if (nextRefreshAt === 0) { document.getElementById('next-refresh').textContent = 'manual mode'; return; }
+  const sec = Math.max(0, Math.floor((nextRefreshAt - Date.now()) / 1000));
+  let txt;
+  if (sec >= 60) txt = `next: ${Math.floor(sec/60)}m ${sec%60}s`;
+  else txt = `next: ${sec}s`;
+  document.getElementById('next-refresh').textContent = txt;
+}
+
+// ============================================================
+//  Init
+// ============================================================
+updateQuotaDisplay();
+// On first open (no saved config), defaults are loaded but the user still
+// needs to paste their bearer token. Show setup so they can do that.
+// On subsequent opens, saved config (with token) skips straight to refresh.
+const isFirstOpen = !localStorage.getItem(LS_KEY);
+if (isFirstOpen) {
+  showSetup();
+} else {
+  refresh();
+}
+</script>
+
+<!-- v21: PWA service worker registration. Fails silently in unsupported
+     browsers (e.g. file:// protocol locally) — production hosting on HTTPS
+     activates offline shell + faster repeat loads. -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./service-worker.js')
+        .then(reg => console.log('[PWA] SW registered, scope:', reg.scope))
+        .catch(err => console.log('[PWA] SW registration skipped:', err.message));
+    });
+  }
+</script>
+</body>
+</html>
