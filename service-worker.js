@@ -11,7 +11,7 @@
 const CACHE_NAME = 'sg-monitor-v21';
 const SHELL_ASSETS = [
   './',
-  './SmartGrid_Dashboard_v21.html',
+  './index.html',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',

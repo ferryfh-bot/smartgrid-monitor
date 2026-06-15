@@ -2,13 +2,16 @@
   "name": "SmartGrid Monitor",
   "short_name": "SG Monitor",
   "description": "Live multi-account trading dashboard for SmartGrid EA.",
-  "start_url": "./SmartGrid_Dashboard_v21.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#0a0e14",
   "theme_color": "#0a0e14",
-  "categories": ["finance", "productivity"],
+  "categories": [
+    "finance",
+    "productivity"
+  ],
   "lang": "en",
   "dir": "ltr",
   "icons": [
